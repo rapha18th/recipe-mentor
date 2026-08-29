@@ -1,0 +1,29 @@
+# Recipe Mentor's dependencies. sozograph is a normal PyPI dependency here
+# -- this repo is an application built on it, not part of its own package.
+#
+#   pip install -r requirements.txt
+#
+# Nothing here is required to run `--backend offline --store local` beyond
+# sozograph itself. Each block below maps to the feature that needs it, so
+# you can comment out what you don't want:
+
+sozograph>=0.2.1
+
+# ADK judge (--backend adk)
+google-adk
+
+# Firestore passport store (--store firestore)
+google-cloud-firestore
+
+# ML pipelines (recipe_mentor/pipelines/maize_train.py, mimii_anomaly.py)
+torch
+onnxruntime
+soundfile
+Pillow
+
+# MIMII fetch only (recipe_mentor/pipelines/fetch_mimii.py) -- pulls a
+# bounded subset via HTTP range requests rather than the full 6.9GB source zip
+remotezip
+
+# Kaggle dataset download (maize_train.py's data source)
+kaggle

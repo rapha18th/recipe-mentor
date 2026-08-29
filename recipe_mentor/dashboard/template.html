@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Recipe Mentor — lab_demo passport</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #12181f; --border: #223041; --text: #e6edf3;
+    --muted: #8b98a5; --accent: #4fb0ff; --done: #3fb950; --corrected: #d29922;
+    --pending: #30363d; --blocked: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); margin: 0; padding: 32px;
+    font: 15px/1.5 -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .updated { color: var(--muted); font-size: 13px; margin-bottom: 28px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  section, .project-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin-bottom: 20px;
+  }
+  h2 { font-size: 16px; margin: 0 0 6px; text-transform: lowercase; }
+  h3 { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 16px 0 8px; }
+  .concept { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .reuse-note { font-size: 12px; color: var(--accent); margin: 0 0 10px; }
+  .step-grid { display: flex; flex-direction: column; gap: 4px; }
+  .step {
+    display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center;
+    padding: 5px 8px; border-radius: 6px; font-size: 13px; border-left: 3px solid var(--pending);
+  }
+  .step-num { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .step-status { font-size: 11px; text-transform: uppercase; color: var(--muted); }
+  .status-done { border-left-color: var(--done); }
+  .status-done .step-status { color: var(--done); }
+  .status-corrected { border-left-color: var(--corrected); }
+  .status-corrected .step-status { color: var(--corrected); }
+  .status-blocked { border-left-color: var(--blocked); }
+  .status-blocked .step-status { color: var(--blocked); }
+  .step.risk .step-title::after { content: " ⚠"; color: var(--corrected); }
+  table.metrics, table.contradictions { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.metrics td, table.contradictions td, table.contradictions th {
+    padding: 6px 8px; border-bottom: 1px solid var(--border);
+  }
+  table.contradictions th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; }
+  .empty { color: var(--muted); font-style: italic; }
+  .ts { color: var(--muted); font-size: 11px; }
+  ul.lessons { list-style: none; margin: 0; padding: 0; }
+  ul.lessons li { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  ul.lessons li:last-child { border-bottom: none; }
+  .lesson-date { color: var(--accent); font-weight: 600; }
+  .lesson-source { color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+  <h1>Recipe Mentor — lab_demo</h1>
+  <p class="updated">Passport last updated {{UPDATED_AT}}</p>
+
+  <div class="grid">
+    {{PROJECTS}}
+  </div>
+
+  <section>
+    <h3>Lessons timeline</h3>
+    <ul class="lessons">
+      {{LESSONS}}
+    </ul>
+  </section>
+
+  <section>
+    <h3>Contradictions (reversed decisions)</h3>
+    <table class="contradictions">
+      <thead><tr><th>Key</th><th>Old</th><th>New</th><th>Source</th></tr></thead>
+      <tbody>
+        {{CONTRADICTIONS}}
+      </tbody>
+    </table>
+  </section>
+</body>
+</html>

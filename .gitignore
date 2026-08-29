@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Generated at runtime, not source
+recipe_mentor/passports/*.json
+recipe_mentor/dashboard.html
+recipe_mentor/data/
+
+# docx build tooling (submission/build_docx.js) -- node deps, not committed
+submission/node_modules/
+submission/package.json
+submission/package-lock.json
+
+.DS_Store
+Thumbs.db
