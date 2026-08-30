@@ -21,6 +21,16 @@ One run at a time: an in-process lock rejects a second run with a plain
 --concurrency=1 --max-instances=1 (see docs/DEPLOY.md) so two browser tabs
 hitting two different container instances can't both hold Kaggle
 credentials in environment variables at once.
+
+Local demo mode (RECIPE_MENTOR_LOCAL_DEMO=1, never set in the Cloud Run
+deploy): for recording a screen capture on your own machine, where the
+Kaggle bring-your-own-token requirement above only exists to keep a
+*public* service honest about whose dataset access it's using. Running
+this yourself, on your own machine, under your own Kaggle account, isn't
+that case -- so this mode lets the Kaggle fields go empty and falls back
+to the same ~/.kaggle/kaggle.json file kaggle_fetch.py has always read,
+and it prefills the problem/dataset fields so a recording can start
+without typing a credential on camera. See docs/DEPLOY.md.
 """
 from __future__ import annotations
 
@@ -46,6 +56,15 @@ STORE = os.environ.get("RECIPE_MENTOR_STORE", "local")
 STATIC_DIR = Path(__file__).parent / "static"
 DASHBOARD_OUT = Path(tempfile.gettempdir()) / "recipe_mentor_dashboard.html"
 
+LOCAL_DEMO = os.environ.get("RECIPE_MENTOR_LOCAL_DEMO", "").lower() in ("1", "true", "yes")
+#: The diesel-generator project's real proxy dataset (see
+#: docs/ADR_Recipe_Mentor_Pipelines_2026-08-29.md for why MIMII-family
+#: acoustic data stands in for a real generator corpus) -- already fetched
+#: and cached locally as of this build, so a recording's first tool call
+#: returns instantly instead of a live multi-minute download.
+LOCAL_DEMO_PROBLEM = "Detect diesel generator bearing faults from acoustic recordings"
+LOCAL_DEMO_DATASET = "senaca/mimii-pump-sound-dataset"
+
 app = FastAPI(title="Recipe Mentor")
 
 _lock = asyncio.Lock()
@@ -55,8 +74,8 @@ _runs: dict[str, dict[str, Any]] = {}
 class RunRequest(BaseModel):
     problem: str
     dataset: str
-    kaggle_username: str
-    kaggle_key: str
+    kaggle_username: str = ""
+    kaggle_key: str = ""
     priority: str = ""
 
 
@@ -85,7 +104,7 @@ async def start_run(req: RunRequest) -> dict:
         raise HTTPException(status_code=400, detail="A problem statement and a Kaggle dataset are both required.")
     if "/" not in dataset:
         raise HTTPException(status_code=400, detail="Dataset should look like owner/slug.")
-    if not req.kaggle_username.strip() or not req.kaggle_key.strip():
+    if not LOCAL_DEMO and (not req.kaggle_username.strip() or not req.kaggle_key.strip()):
         raise HTTPException(
             status_code=400,
             detail="Kaggle username and key are both required -- this run downloads a real dataset under your Kaggle identity.",
@@ -101,9 +120,15 @@ async def start_run(req: RunRequest) -> dict:
 async def _execute_run(run_id: str, req: RunRequest, queue: asyncio.Queue) -> None:
     await _lock.acquire()
     prev_user, prev_key = os.environ.get("KAGGLE_USERNAME"), os.environ.get("KAGGLE_KEY")
+    #: In local demo mode with no credentials typed, leave the environment
+    #: untouched -- KaggleApi.authenticate() falls back to
+    #: ~/.kaggle/kaggle.json on its own, the same file-based auth this repo
+    #: has documented from the start.
+    set_env = bool(req.kaggle_username.strip() and req.kaggle_key.strip())
     try:
-        os.environ["KAGGLE_USERNAME"] = req.kaggle_username.strip()
-        os.environ["KAGGLE_KEY"] = req.kaggle_key.strip()
+        if set_env:
+            os.environ["KAGGLE_USERNAME"] = req.kaggle_username.strip()
+            os.environ["KAGGLE_KEY"] = req.kaggle_key.strip()
 
         passport = _load_passport(store=STORE)
         session = MentorSession(
@@ -124,14 +149,15 @@ async def _execute_run(run_id: str, req: RunRequest, queue: asyncio.Queue) -> No
         await queue.put({"type": "error", "message": str(exc)})
         _runs[run_id]["status"] = "error"
     finally:
-        if prev_user is not None:
-            os.environ["KAGGLE_USERNAME"] = prev_user
-        else:
-            os.environ.pop("KAGGLE_USERNAME", None)
-        if prev_key is not None:
-            os.environ["KAGGLE_KEY"] = prev_key
-        else:
-            os.environ.pop("KAGGLE_KEY", None)
+        if set_env:
+            if prev_user is not None:
+                os.environ["KAGGLE_USERNAME"] = prev_user
+            else:
+                os.environ.pop("KAGGLE_USERNAME", None)
+            if prev_key is not None:
+                os.environ["KAGGLE_KEY"] = prev_key
+            else:
+                os.environ.pop("KAGGLE_KEY", None)
         await queue.put(None)  # sentinel: stream end
         _lock.release()
 
@@ -167,6 +193,18 @@ async def submit_feedback(run_id: str, req: FeedbackRequest) -> dict:
     return {"ok": True}
 
 
+@app.get("/api/local-demo-defaults")
+async def local_demo_defaults() -> dict:
+    """Only ever returns something when RECIPE_MENTOR_LOCAL_DEMO is set --
+    never in the Cloud Run deploy. Deliberately never includes a Kaggle
+    credential, even locally: the frontend just hides the credential
+    fields and submits blank ones, and the backend's own kaggle_fetch call
+    falls back to ~/.kaggle/kaggle.json on the machine it's running on."""
+    if not LOCAL_DEMO:
+        raise HTTPException(status_code=404, detail="Not in local demo mode.")
+    return {"problem": LOCAL_DEMO_PROBLEM, "dataset": LOCAL_DEMO_DATASET}
+
+
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "store": STORE}
+    return {"status": "ok", "store": STORE, "local_demo": LOCAL_DEMO}

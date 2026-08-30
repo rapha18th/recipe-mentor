@@ -132,7 +132,7 @@
     <label for="priority">Priority for this run (optional)</label>
     <input type="text" id="priority" placeholder="e.g. favor speed over accuracy">
 
-    <div class="row">
+    <div id="kaggle-fields" class="row">
       <div>
         <label for="kaggle_username">Kaggle username</label>
         <input type="text" id="kaggle_username" autocomplete="off">
@@ -142,7 +142,7 @@
         <input type="password" id="kaggle_key" autocomplete="off">
       </div>
     </div>
-    <p class="trust-note">
+    <p id="kaggle-trust-note" class="trust-note">
       Used only to fetch this one dataset, for this one run. Never written to disk, never
       logged, cleared the moment the run ends. From
       <a href="https://www.kaggle.com/settings" target="_blank" rel="noopener">kaggle.com/settings</a>
@@ -180,6 +180,21 @@
 
 <script>
 let currentRunId = null;
+
+(async function initLocalDemo() {
+  let resp;
+  try {
+    resp = await fetch('/api/local-demo-defaults');
+  } catch (e) {
+    return;
+  }
+  if (!resp.ok) return;
+  const defaults = await resp.json();
+  document.getElementById('problem').value = defaults.problem;
+  document.getElementById('dataset').value = defaults.dataset;
+  document.getElementById('kaggle-fields').classList.add('hidden');
+  document.getElementById('kaggle-trust-note').classList.add('hidden');
+})();
 
 function showError(msg) {
   const el = document.getElementById('error-banner');
