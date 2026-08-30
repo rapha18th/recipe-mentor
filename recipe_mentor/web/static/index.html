@@ -103,6 +103,34 @@
   .footer-links a { color: var(--teal); text-decoration: none; }
   .footer-links a:hover { text-decoration: underline; }
 
+  .choice-block {
+    background: var(--purple-bg); border: 1.5px solid var(--purple); border-radius: 10px;
+    padding: 16px; margin-top: 16px;
+  }
+  .choice-question { font-size: 14.5px; font-weight: 600; margin-bottom: 12px; }
+  .choice-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .choice-option {
+    background: #fff; color: var(--purple); border: 1.5px solid var(--purple);
+    border-radius: 8px; padding: 8px 14px; font-size: 13.5px; font-weight: 600;
+  }
+  .choice-option:hover { background: var(--purple); color: #fff; }
+  .choice-free-row { display: flex; gap: 8px; }
+  .choice-free-row input { flex: 1; }
+  .choice-free-row button { padding: 10px 16px; margin-top: 0; }
+
+  .chat-panel { margin-top: 32px; }
+  #chat-messages {
+    display: flex; flex-direction: column; gap: 10px; max-height: 340px;
+    overflow-y: auto; margin-bottom: 14px;
+  }
+  .chat-msg { padding: 10px 14px; border-radius: 10px; font-size: 13.5px; max-width: 85%; line-height: 1.45; }
+  .chat-msg.user { background: var(--teal); color: #fff; align-self: flex-end; }
+  .chat-msg.agent { background: var(--gold-bg); border: 1.5px solid var(--gold); align-self: flex-start; }
+  .chat-msg.empty { color: var(--muted); font-style: italic; background: transparent; }
+  .chat-row { display: flex; gap: 8px; }
+  .chat-row input { flex: 1; }
+  .chat-row button { padding: 12px 18px; margin-top: 0; }
+
   .hidden { display: none; }
 </style>
 </head>
@@ -158,6 +186,15 @@
     <div id="narration-wrap" class="hidden">
       <div class="narration" id="narration"></div>
     </div>
+    <div id="choice-block" class="choice-block hidden">
+      <div class="choice-question" id="choice-question"></div>
+      <div class="choice-options" id="choice-options"></div>
+      <div class="choice-free-row">
+        <input type="text" id="choice-free" placeholder="or type your own answer">
+        <button class="btn-primary" onclick="submitChoice(document.getElementById('choice-free').value)">Send</button>
+      </div>
+    </div>
+
     <div id="steps" class="steps hidden"></div>
 
     <div id="feedback-block" class="hidden">
@@ -169,6 +206,17 @@
 
     <div id="done-block" class="hidden">
       <button class="btn-secondary" onclick="location.reload()">Start another project</button>
+    </div>
+  </section>
+
+  <section class="panel chat-panel">
+    <h2>Ask about your history</h2>
+    <div id="chat-messages">
+      <div class="chat-msg empty">What have we tried so far? What's worth exploring next? Ask a real question -- the answer is grounded in the actual passport, not a guess.</div>
+    </div>
+    <div class="chat-row">
+      <input type="text" id="chat-input" placeholder="e.g. what should I try next?" onkeydown="if(event.key==='Enter') sendChat();">
+      <button class="btn-primary" onclick="sendChat()">Send</button>
     </div>
   </section>
 
@@ -267,6 +315,8 @@ function handleEvent(event) {
   } else if (event.type === 'tool_result') {
     const shown = Object.fromEntries(Object.entries(event.result).filter(([k]) => k !== 'step_results'));
     logLine('  ' + event.name + ' -> ' + JSON.stringify(shown), 'log-result');
+  } else if (event.type === 'awaiting_choice') {
+    showChoice(event.question, event.options || []);
   } else if (event.type === 'project_identified') {
     logLine('  identified as a ' + event.task_type + ' project (' + event.project_key + ')', 'log-info');
   } else if (event.type === 'budget_reached') {
@@ -284,6 +334,37 @@ function handleEvent(event) {
     document.getElementById('done-block').classList.remove('hidden');
   } else if (event.type === 'done') {
     // final_text already shown; progress event follows separately.
+  }
+}
+
+function showChoice(question, options) {
+  document.getElementById('choice-question').textContent = question;
+  const optsEl = document.getElementById('choice-options');
+  optsEl.innerHTML = '';
+  options.forEach((opt) => {
+    const btn = document.createElement('button');
+    btn.className = 'choice-option';
+    btn.textContent = opt;
+    btn.onclick = () => submitChoice(opt);
+    optsEl.appendChild(btn);
+  });
+  document.getElementById('choice-free').value = '';
+  document.getElementById('choice-block').classList.remove('hidden');
+  logLine('? ' + question + (options.length ? ' [' + options.join(' / ') + ']' : ''), 'log-info');
+}
+
+async function submitChoice(answer) {
+  answer = (answer || '').trim();
+  if (!answer) return;
+  document.getElementById('choice-block').classList.add('hidden');
+  logLine('  you answered: ' + answer, 'log-call');
+  try {
+    await fetch('/api/run/' + currentRunId + '/choice', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({answer}),
+    });
+  } catch (e) {
+    showError('Your answer could not be sent: ' + e);
   }
 }
 
@@ -320,6 +401,39 @@ async function postFeedback(feedback) {
   }
   logLine(feedback ? '  feedback recorded -- future same-task-type projects will see it' : '  feedback skipped', 'log-info');
   document.getElementById('done-block').classList.remove('hidden');
+}
+
+function addChatMessage(text, cls) {
+  const box = document.getElementById('chat-messages');
+  const empty = box.querySelector('.chat-msg.empty');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + cls;
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  addChatMessage(message, 'user');
+  addChatMessage('...', 'agent');
+  const box = document.getElementById('chat-messages');
+  const placeholder = box.lastChild;
+
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message}),
+    });
+    const body = await resp.json();
+    placeholder.textContent = resp.ok ? body.reply : ('Error: ' + (body.detail || 'something went wrong'));
+  } catch (e) {
+    placeholder.textContent = 'Could not reach the server: ' + e;
+  }
 }
 </script>
 </body>

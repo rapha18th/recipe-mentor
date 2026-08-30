@@ -18,6 +18,7 @@ for whatever completed.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import time
 from typing import Any, AsyncIterator
@@ -32,22 +33,49 @@ from ..projects import ProjectCard
 from ..projects.dynamic import TASK_TYPE_RISK_STEPS, author_project_card, slugify_project_key
 from ..recall import cross_project_recall
 
-MAX_EVENTS = 60
-MAX_SECONDS = 300
+MAX_EVENTS = 80
+#: Generous on purpose: ask_user() genuinely pauses for a real human
+#: answer, and that wait time counts against wall-clock elapsed even
+#: though the loop itself is idle (see run_agent's docstring on why the
+#: budget check can't fire mid-wait, only after -- this just makes sure a
+#: minute or two of real deliberation on-camera doesn't itself trip the
+#: budget once the agent resumes).
+MAX_SECONDS = 1200
 
 AGENT_INSTRUCTION = (
-    "You are an autonomous ML engineer following a proven twelve-step production "
-    "recipe. Given a problem statement and a Kaggle dataset reference, call your "
-    "tools in this order: fetch_kaggle_dataset, detect_task_type, configure_run, "
-    "train_and_verify, record_results. Each tool enforces the recipe's discipline "
-    "itself -- you cannot skip quantization or verification, only choose "
-    "hyperparameters within the range the tool accepts. If a tool returns an "
-    "error, read it and correct your next call; do not repeat the same call "
-    "unchanged. If the user stated a priority for speed vs. accuracy, let that "
-    "guide your epoch count choice within the allowed range. After "
-    "record_results succeeds, write one short paragraph summarizing what you "
-    "found, in your own words, speaking directly to the person who asked for "
-    "this project -- then stop."
+    "You are an autonomous ML engineer, and a collaborative partner -- not a "
+    "silent batch job. Work through these tools: fetch_kaggle_dataset, "
+    "detect_task_type, explore_dataset, ask_user, configure_run, "
+    "train_and_verify, record_results.\n\n"
+    "After detect_task_type and explore_dataset, you will know real, specific "
+    "things about this dataset -- class balance, sample-rate consistency, "
+    "corrupt files, image dimensions -- and you were told, at the start of this "
+    "conversation, what past projects in this lab learned the hard way. Before "
+    "calling configure_run, call ask_user with ONE concrete, specific question "
+    "about a real preprocessing or configuration decision this dataset actually "
+    "presents, grounded explicitly in what explore_dataset found and in any "
+    "relevant past lesson -- name 2-4 real options with a one-line tradeoff "
+    "each, and say which you'd recommend and why. Do not ask a vague or generic "
+    "question; if explore_dataset found nothing decision-worthy, say so plainly "
+    "and proceed without asking. You may call ask_user again if a second real "
+    "decision comes up later (for instance, if train_and_verify's result is "
+    "surprising and there's a genuine choice about how to proceed) -- but only "
+    "when there's an actual decision, not to seem collaborative.\n\n"
+    "Each tool enforces the recipe's discipline itself -- you cannot skip "
+    "quantization or verification, only choose hyperparameters within the "
+    "range the tool accepts. For image_classification, configure_run also "
+    "accepts image_size (the resize resolution training actually uses) -- if "
+    "your ask_user question was about resolution or image dimension spread, "
+    "pass the resulting choice here, don't just narrate it. configure_run's "
+    "hyperparameters should reflect whatever the user actually chose in "
+    "ask_user, not be decided independently of it. If a tool returns an "
+    "error, read it and correct your "
+    "next call; do not repeat the same call unchanged. If the user stated a "
+    "priority for speed vs. accuracy at the very start, let that guide your "
+    "epoch count choice too. After record_results succeeds, write one short "
+    "paragraph summarizing what you found and what was decided together, in "
+    "your own words, speaking directly to the person who asked for this "
+    "project -- then stop."
 )
 
 
@@ -130,52 +158,134 @@ async def run_agent(
     """Drives one full agent run, yielding an event per thing that happens:
     {"type": "tool_call", "name", "args"}
     {"type": "tool_result", "name", "result"}   -- result includes step_results
+    {"type": "awaiting_choice", "question", "options"}  -- ask_user is now
+        genuinely blocked; the caller must get a real answer and call
+        toolkit.answer_pending(answer) before this generator advances again
     {"type": "project_identified", "task_type", "project_key"}
     {"type": "final_text", "text"}
     {"type": "budget_reached"}
     {"type": "fallback_finalized"}
     {"type": "done", "final_text"}
-    Every passport write happens inline as these are yielded, not after."""
+    Every passport write happens inline as these are yielded, not after.
+
+    "awaiting_choice" is NOT inferred from the ADK function_call event for
+    ask_user -- that was tried and produced a real, reproducible hang.
+    The function_call event announces the model's *decision* to call
+    ask_user; the tool's own coroutine (and the asyncio.Future it awaits)
+    doesn't exist until ADK actually invokes it, one step later. Answering
+    on the function_call event resolves a future that isn't there yet, and
+    the real one -- created moments after -- waits forever. Instead,
+    toolkit.ask_user() fires a synchronous callback the instant it
+    genuinely starts waiting, bridged into this generator's own yield
+    stream via an asyncio.Event, concurrently merged against the ADK
+    event stream below.
+
+    That merge drives `runner.run(prompt)` from exactly one persistent
+    background task (`_pump`), not a fresh `asyncio.ensure_future(anext(...))`
+    per event -- also tried, also a real bug: ADK's own tracing keeps a
+    contextvar token across an operation, and re-wrapping `__anext__()` in
+    a new Task each iteration silently split that operation across two
+    different task contexts, raising `ValueError: ... was created in a
+    different Context` the first time a tool call and its result landed in
+    separate iterations. One task owns the whole ADK stream for its entire
+    lifetime; only the queue reads it feeds are re-awaited per iteration."""
     tools = [
-        toolkit.fetch_kaggle_dataset, toolkit.detect_task_type,
-        toolkit.configure_run, toolkit.train_and_verify, toolkit.record_results,
+        toolkit.fetch_kaggle_dataset, toolkit.detect_task_type, toolkit.explore_dataset,
+        toolkit.ask_user, toolkit.configure_run, toolkit.train_and_verify, toolkit.record_results,
     ]
     runner = build_agent_runner(tools, AGENT_INSTRUCTION)
+
+    choice_ready = asyncio.Event()
+    pending_choice: dict[str, Any] = {}
+
+    def _on_awaiting_choice(question: str, options: list[str]) -> None:
+        pending_choice["question"] = question
+        pending_choice["options"] = options
+        choice_ready.set()
+
+    toolkit.on_awaiting_choice = _on_awaiting_choice
 
     final_text = ""
     n_events = 0
     start = time.monotonic()
-    async for event in runner.run(prompt):
-        n_events += 1
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                fc = getattr(part, "function_call", None)
-                if fc is not None:
-                    yield {"type": "tool_call", "name": fc.name, "args": dict(fc.args or {})}
-                fr = getattr(part, "function_response", None)
-                if fr is not None:
-                    result = fr.response or {}
-                    yield {"type": "tool_result", "name": fr.name, "result": result}
-                    _apply_step_results(session, result)
-                    if fr.name == "detect_task_type" and "task_type" in result:
-                        full_card = author_project_card(
-                            problem_statement=problem, dataset_ref=dataset_ref,
-                            task_type=result["task_type"], dataset_summary=_summarize_dataset(result),
-                        )
-                        session.project = full_card
-                        _register_project(passport, full_card, result["task_type"], dataset_ref)
-                        yield {
-                            "type": "project_identified",
-                            "task_type": result["task_type"], "project_key": full_card.key,
-                        }
-            if event.is_final_response() and event.content.parts:
-                text = event.content.parts[0].text
-                if text:
-                    final_text = text
-                    yield {"type": "final_text", "text": text}
-        if n_events >= max_events or (time.monotonic() - start) > max_seconds:
-            yield {"type": "budget_reached"}
-            break
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _pump() -> None:
+        try:
+            async for ev in runner.run(prompt):
+                await queue.put(("event", ev))
+        except Exception as exc:  # surfaced to the caller below, not swallowed
+            await queue.put(("error", exc))
+        finally:
+            await queue.put(("done", None))
+
+    pump_task = asyncio.ensure_future(_pump())
+    queue_task = asyncio.ensure_future(queue.get())
+    choice_task = asyncio.ensure_future(choice_ready.wait())
+
+    try:
+        while True:
+            done, _ = await asyncio.wait({queue_task, choice_task}, return_when=asyncio.FIRST_COMPLETED)
+
+            if choice_task in done:
+                choice_ready.clear()
+                yield {
+                    "type": "awaiting_choice",
+                    "question": pending_choice.get("question", ""),
+                    "options": list(pending_choice.get("options", [])),
+                }
+                choice_task = asyncio.ensure_future(choice_ready.wait())
+                continue  # queue_task, if also ready, gets picked up next iteration
+
+            kind, payload = queue_task.result()
+            queue_task = asyncio.ensure_future(queue.get())
+
+            if kind == "done":
+                break
+            if kind == "error":
+                raise payload
+            event = payload
+
+            n_events += 1
+            if event.content and event.content.parts:
+                for part in event.content.parts:
+                    fc = getattr(part, "function_call", None)
+                    if fc is not None:
+                        yield {"type": "tool_call", "name": fc.name, "args": dict(fc.args or {})}
+                    fr = getattr(part, "function_response", None)
+                    if fr is not None:
+                        result = fr.response or {}
+                        yield {"type": "tool_result", "name": fr.name, "result": result}
+                        _apply_step_results(session, result)
+                        if fr.name == "detect_task_type" and "task_type" in result:
+                            full_card = author_project_card(
+                                problem_statement=problem, dataset_ref=dataset_ref,
+                                task_type=result["task_type"], dataset_summary=_summarize_dataset(result),
+                            )
+                            session.project = full_card
+                            _register_project(passport, full_card, result["task_type"], dataset_ref)
+                            yield {
+                                "type": "project_identified",
+                                "task_type": result["task_type"], "project_key": full_card.key,
+                            }
+                if event.is_final_response() and event.content.parts:
+                    text = event.content.parts[0].text
+                    if text:
+                        final_text = text
+                        yield {"type": "final_text", "text": text}
+            if n_events >= max_events or (time.monotonic() - start) > max_seconds:
+                yield {"type": "budget_reached"}
+                break
+    finally:
+        toolkit.on_awaiting_choice = None
+        for t in (pump_task, queue_task, choice_task):
+            if not t.done():
+                t.cancel()
+                try:
+                    await t
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
 
     # Deterministic fallback: if training finished but the agent never
     # called record_results, finish it ourselves so a run always completes,
@@ -204,6 +314,10 @@ def format_event(event: dict[str, Any]) -> str | None:
     if kind == "tool_result":
         shown = {k: v for k, v in event["result"].items() if k != "step_results"}
         return f"[tool result] {event['name']} -> {shown}"
+    if kind == "awaiting_choice":
+        opts = event.get("options") or []
+        suffix = f" Options: {', '.join(opts)}" if opts else ""
+        return f"[awaiting your answer] {event['question']}{suffix}"
     if kind == "project_identified":
         return f"[identified] {event['task_type']} project -> {event['project_key']}"
     if kind == "final_text":

@@ -60,9 +60,12 @@ def _ensure_vertex_env(project: str, location: str) -> None:
 class AdkJudge:
     """
     A single ADK agent + session, reused across every step of one mentor
-    session. Reusing one session (rather than a fresh one per step) is
-    deliberate: it lets the agent see the whole recipe walk's prior
-    exchanges in context, not just the current step in isolation.
+    session (or every turn of one chat -- see build_history_chat() below,
+    which reuses this exact class with a different instruction rather than
+    duplicating the session/runner plumbing). Reusing one session (rather
+    than a fresh one per call) is deliberate: it lets the agent see the
+    whole prior exchange in context, not just the current turn in
+    isolation.
     """
 
     def __init__(
@@ -72,6 +75,8 @@ class AdkJudge:
         location: str = DEFAULT_LOCATION,
         model: str = DEFAULT_MODEL,
         user_id: str = "sozo_lab_demo",
+        name: str = "recipe_mentor_judge",
+        instruction: str = _JUDGE_INSTRUCTION,
     ):
         _ensure_vertex_env(project, location)
         # Imported lazily so the offline backend never requires google-adk
@@ -83,7 +88,7 @@ class AdkJudge:
         self.model = model
         self.user_id = user_id
         self.session_id = f"{user_id}_session"
-        self._agent = LlmAgent(model=model, name="recipe_mentor_judge", instruction=_JUDGE_INSTRUCTION)
+        self._agent = LlmAgent(model=model, name=name, instruction=instruction)
         self._session_service = InMemorySessionService()
         self._runner = Runner(agent=self._agent, app_name=APP_NAME, session_service=self._session_service)
         self._session_ready = False

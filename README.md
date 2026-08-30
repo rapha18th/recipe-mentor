@@ -4,11 +4,17 @@ A Collaborative Partner agent, built on
 [SozoGraph](https://github.com/Sozo-Analytics-Lab/sozograph)
 ([PyPI](https://pypi.org/project/sozograph/)). Give it a problem and a
 Kaggle dataset and a real Google ADK agent fetches the data, figures out
-what kind of task it is, trains and quantizes and verifies a model, and
-records the result, deciding what to call and when. It asks one
-clarifying question before it starts and one for feedback after it
-finishes, and it recalls what tripped it up on one project, unprompted,
-the moment a related project starts.
+what kind of task it is, and samples it for real findings -- class
+balance, image dimension spread, sample-rate consistency. Before it
+configures anything, it puts a real decision to you: a concrete
+preprocessing or hyperparameter choice, grounded in what it just found and
+in what past projects in this lab learned the hard way, with options and a
+recommendation, not a rhetorical question. Then it trains, quantizes,
+verifies, and records, deciding what to call and when. It asks one more
+question after it finishes for feedback, and it recalls what tripped it up
+on one project, unprompted, the moment a related project starts. You can
+also just ask it, in plain language, what's been tried so far and what's
+worth exploring next.
 
 **Try it live: [recipe-mentor-web-186891137448.us-central1.run.app](https://recipe-mentor-web-186891137448.us-central1.run.app)**
 -- hosted on Cloud Run, bring your own Kaggle credentials, nothing to
@@ -206,10 +212,16 @@ python -m recipe_mentor.agent_runner \
 ```
 
 It asks one clarifying question before it starts (a speed-vs-accuracy
-priority, free text, folded straight into the agent's own instructions)
-and one for feedback after it finishes. The feedback is recorded the same
-way every lesson is, so the next project of the same kind sees it,
-unprompted, before it starts.
+priority, free text, folded straight into the agent's own instructions).
+Then, once it's fetched and sampled the dataset, it asks a second, more
+specific question -- a real preprocessing or configuration decision this
+dataset actually presents (image resolution given the size spread it
+found, how to weight a real class imbalance), with concrete options and a
+stated recommendation, grounded in that exploration and in what past
+projects recorded. Your answer changes what actually runs, not just what
+gets narrated afterward. One more question, for feedback, comes after it
+finishes. The feedback is recorded the same way every lesson is, so the
+next project of the same kind sees it, unprompted, before it starts.
 
 ### Hosted interface
 
@@ -281,11 +293,15 @@ Three ADRs, written as the build progressed, cover the reasoning in detail:
   LangChain outright, a compliance fix and an architectural upgrade, and
   the Firestore database issue above.
 - `docs/ADR_Recipe_Mentor_Autonomous_Agent_2026-08-30.md`: the autonomous
-  agent path above. Why five tools, not ten. Why the tools enforce the
-  recipe's discipline instead of trusting the model to. How a dynamically
-  created project gets a `ProjectCard` without a second LLM call. Why the
-  clarifying question and feedback capture are asked by the harness, not
-  the model mid-loop. Real numbers from verifying all of it live.
+  agent path above. Why coarse tools, not fine-grained ones. Why the
+  tools enforce the recipe's discipline instead of trusting the model to.
+  How a dynamically created project gets a `ProjectCard` without a second
+  LLM call. Why the bookend clarifying question and feedback capture are
+  asked by the harness, not the model mid-loop -- and, in a same-day
+  addendum, how `ask_user` genuinely does pause the model mid-loop for a
+  real decision, the two real concurrency bugs that took to get there, and
+  the reflective chat feature built alongside it. Real numbers from
+  verifying all of it live.
 
 ## What's real, and what's a known gap
 

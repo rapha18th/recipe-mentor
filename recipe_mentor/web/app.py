@@ -46,6 +46,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
+from ..agent.chat import build_history_chat
 from ..agent.core import build_kickoff_prompt, format_event, provisional_project_card, run_agent
 from ..agent.toolkit import AgentToolkit
 from ..dashboard.render_dashboard import render as render_dashboard
@@ -69,6 +70,11 @@ app = FastAPI(title="Recipe Mentor")
 
 _lock = asyncio.Lock()
 _runs: dict[str, dict[str, Any]] = {}
+#: One reflective chat, grounded in the passport at the moment it started.
+#: Rebuilt on "reset" (a fresh conversation) or if a run has happened
+#: since it was built, so it's never grounded in stale history.
+_history_chat: Any = None
+_history_chat_built_at: str | None = None
 
 
 class RunRequest(BaseModel):
@@ -81,6 +87,15 @@ class RunRequest(BaseModel):
 
 class FeedbackRequest(BaseModel):
     feedback: str = ""
+
+
+class ChoiceRequest(BaseModel):
+    answer: str = ""
+
+
+class ChatRequest(BaseModel):
+    message: str
+    reset: bool = False
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -112,7 +127,7 @@ async def start_run(req: RunRequest) -> dict:
 
     run_id = uuid.uuid4().hex[:12]
     queue: asyncio.Queue = asyncio.Queue()
-    _runs[run_id] = {"queue": queue, "status": "running", "session": None, "passport": None}
+    _runs[run_id] = {"queue": queue, "status": "running", "session": None, "passport": None, "toolkit": None}
     asyncio.create_task(_execute_run(run_id, req, queue))
     return {"run_id": run_id}
 
@@ -137,6 +152,7 @@ async def _execute_run(run_id: str, req: RunRequest, queue: asyncio.Queue) -> No
         toolkit = AgentToolkit()
         _runs[run_id]["session"] = session
         _runs[run_id]["passport"] = passport
+        _runs[run_id]["toolkit"] = toolkit
 
         kickoff = build_kickoff_prompt(req.problem.strip(), req.dataset.strip(), passport, req.priority.strip())
         print(f"\n===== run {run_id} started -- Google ADK agent, Gemini 3.5 via Vertex AI =====", flush=True)
@@ -184,6 +200,20 @@ async def run_events(run_id: str) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+@app.post("/api/run/{run_id}/choice")
+async def submit_choice(run_id: str, req: ChoiceRequest) -> dict:
+    """Answers a pending ask_user() call -- the agent is genuinely
+    blocked inside its own tool call until this arrives; nothing else in
+    the run advances until a real answer lands here."""
+    run = _runs.get(run_id)
+    if run is None or run.get("toolkit") is None:
+        raise HTTPException(status_code=404, detail="Unknown or unfinished run.")
+    toolkit: AgentToolkit = run["toolkit"]
+    if not toolkit.answer_pending(req.answer.strip()):
+        raise HTTPException(status_code=409, detail="Nothing is currently waiting on an answer.")
+    return {"ok": True}
+
+
 @app.post("/api/run/{run_id}/feedback")
 async def submit_feedback(run_id: str, req: FeedbackRequest) -> dict:
     run = _runs.get(run_id)
@@ -196,6 +226,30 @@ async def submit_feedback(run_id: str, req: FeedbackRequest) -> dict:
         _save_passport(passport, store=STORE)
     run["status"] = "done"
     return {"ok": True}
+
+
+@app.post("/api/chat")
+async def chat(req: ChatRequest) -> dict:
+    """A real Gemini conversation grounded in the passport's own history --
+    no tools, no autonomy, just the easy complement to the autonomous
+    agent above: ask what's been done, get suggestions for what to try
+    next, grounded in the actual recorded gaps and lessons, not generic
+    advice."""
+    global _history_chat, _history_chat_built_at
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="A message is required.")
+
+    passport = _load_passport(store=STORE)
+    stamp = passport.updated_at.isoformat()
+    if req.reset or _history_chat is None or _history_chat_built_at != stamp:
+        _history_chat = build_history_chat(passport)
+        _history_chat_built_at = stamp
+
+    # Not .ask() -- that wraps asyncio.run(), which can't be called from
+    # inside a route handler already running in an event loop. This route
+    # is already async, so it awaits the same underlying coroutine directly.
+    reply = await _history_chat._ask_async(req.message.strip())
+    return {"reply": reply}
 
 
 @app.get("/api/local-demo-defaults")

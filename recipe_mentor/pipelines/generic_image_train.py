@@ -63,8 +63,8 @@ def _list_images(class_dir: Path) -> list[Path]:
     return sorted(p for p in class_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS)
 
 
-def _load_image(path: Path) -> np.ndarray:
-    img = Image.open(path).convert("RGB").resize((IMG_SIZE, IMG_SIZE))
+def _load_image(path: Path, image_size: int) -> np.ndarray:
+    img = Image.open(path).convert("RGB").resize((image_size, image_size))
     arr = np.asarray(img, dtype=np.float32) / 255.0
     return arr.transpose(2, 0, 1)  # HWC -> CHW
 
@@ -86,7 +86,7 @@ def _split_sizes(n_available: int) -> tuple[int, int, int]:
     return n_train, n_val, n_test
 
 
-def _build_splits(root: Path, classes: list[str], seed: int = 0):
+def _build_splits(root: Path, classes: list[str], image_size: int, seed: int = 0):
     rng = random.Random(seed)
     train_x, train_y, val_x, val_y, test_x, test_y = [], [], [], [], [], []
     class_counts: dict[str, int] = {}
@@ -100,11 +100,11 @@ def _build_splits(root: Path, classes: list[str], seed: int = 0):
         n_train, n_val, n_test = _split_sizes(len(files))
 
         for f in files[:n_train]:
-            train_x.append(_load_image(f)); train_y.append(label)
+            train_x.append(_load_image(f, image_size)); train_y.append(label)
         for f in files[n_train:n_train + n_val]:
-            val_x.append(_load_image(f)); val_y.append(label)
+            val_x.append(_load_image(f, image_size)); val_y.append(label)
         for f in files[n_train + n_val:n_train + n_val + n_test]:
-            test_x.append(_load_image(f)); test_y.append(label)
+            test_x.append(_load_image(f, image_size)); test_y.append(label)
 
     def stack(xs, ys):
         return Split(np.stack(xs).astype(np.float32), np.array(ys, dtype=np.int64))
@@ -115,6 +115,7 @@ def _build_splits(root: Path, classes: list[str], seed: int = 0):
 @dataclass
 class RunReport:
     classes: list
+    image_size: int
     n_params: int
     n_train: int
     n_val: int
@@ -134,12 +135,13 @@ def _accuracy(logits: np.ndarray, labels: np.ndarray) -> float:
 
 
 def run(
-    root: Path, classes: list[str], out_dir: Path, *, epochs: int = 15, batch_size: int = 16, lr: float = 1e-3,
+    root: Path, classes: list[str], out_dir: Path, *,
+    epochs: int = 15, batch_size: int = 16, lr: float = 1e-3, image_size: int = IMG_SIZE,
 ) -> RunReport:
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading images from {root} ({len(classes)} classes)...")
-    train, val, test, class_counts = _build_splits(root, classes)
+    print(f"Loading images from {root} ({len(classes)} classes) at {image_size}x{image_size}...")
+    train, val, test, class_counts = _build_splits(root, classes, image_size)
     print(f"train={len(train.y)} val={len(val.y)} test={len(test.y)}  class counts={class_counts}")
 
     counts = np.array([class_counts[c] for c in classes], dtype=np.float32)
@@ -186,7 +188,7 @@ def run(
     print(f"Restored best-validation checkpoint (val_acc={best_val_acc:.4f})")
 
     fp32_path, int8_path = out_dir / "model_fp32.onnx", out_dir / "model_int8.onnx"
-    export_onnx(model, torch.randn(1, 3, IMG_SIZE, IMG_SIZE), fp32_path, input_name="image")
+    export_onnx(model, torch.randn(1, 3, image_size, image_size), fp32_path, input_name="image")
     calib = [train.x[i:i + 1] for i in range(min(50, len(train.x)))]
     quantize_static_int8(fp32_path, int8_path, calib, input_name="image")
 
@@ -198,7 +200,7 @@ def run(
     print(f"FP32 accuracy={result.fp32_metric:.4f}  INT8 accuracy={result.int8_metric:.4f}  verdict={result.verdict}")
 
     report = RunReport(
-        classes=classes, n_params=n_params,
+        classes=classes, image_size=image_size, n_params=n_params,
         n_train=len(train.y), n_val=len(val.y), n_test=len(test.y),
         class_counts_full_corpus=class_counts, class_weights_used=weights.round(4).tolist(),
         train_loss_final=final_loss, fp32_accuracy=result.fp32_metric, int8_accuracy=result.int8_metric,

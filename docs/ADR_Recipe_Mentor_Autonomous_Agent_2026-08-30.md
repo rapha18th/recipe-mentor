@@ -224,6 +224,78 @@ and 10 Observations into `passports/lab_demo.json` under the exact
 and rendered a three-project dashboard (`maize`, `diesel_generator`, and
 the new agent-run project) with no server running.
 
+## Addendum, 2026-08-30 (later the same day): mid-run collaboration, not just bookend questions
+
+Fair critique, acted on the same day: a run that fetches, trains, and
+records with no human input in the middle isn't "collaborative" just
+because it asks one question before and one after. Real collaboration
+means presenting actual decisions -- preprocessing, configuration -- as
+choices, grounded in what this specific dataset's exploration finds and
+what past runs' recorded gotchas suggest, not deciding silently and only
+reporting the outcome afterward.
+
+**This corrects a claim in the section above.** "ADK's tool-calling loop
+is built around executing tools to completion, not pausing for a human
+mid-stream" turned out to be wrong, checked rather than left as an
+assumption: ADK's `FunctionTool._invoke_callable` (confirmed by reading
+the installed `google-adk` package's own source, not guessed) detects
+`inspect.iscoroutinefunction(target)` and `await`s it directly. An async
+tool method that itself `await`s a real `asyncio.Future` genuinely
+suspends the whole tool-calling loop until something outside resolves
+that future -- no polling, no fake wait, the ADK `Runner`'s event stream
+simply produces no further events until it does.
+
+**Two new tools.** `explore_dataset()` (`agent/explore.py`) samples the
+fetched dataset for real, empirical findings -- image dimension spread
+and corrupt-file count for image_classification; sample-rate consistency,
+duration range, and clipping for audio_anomaly -- distinct from
+`detect_task_type`'s pure shape-matching. `ask_user(question, options)`
+(`agent/toolkit.py`) is the one genuinely blocking tool: it creates an
+`asyncio.Future`, awaits it, and returns whatever `answer_pending()` sets
+it to from outside (`agent_runner.py`'s `input()`, or `web/app.py`'s new
+`/api/run/{id}/choice` endpoint). The system instruction directs the
+agent to call `ask_user` after `explore_dataset`, grounded explicitly in
+its findings plus the cross-project recall already given at kickoff, with
+2-4 concrete options and a stated recommendation -- not a vague question,
+and not asked merely to seem collaborative when there's nothing to decide.
+
+**A real gap this caught, live, in the first test run.** The agent asked a
+genuinely well-grounded question -- image resize resolution, citing the
+exact dimension spread `explore_dataset` found (256x256 to 4608x3456) --
+that `configure_run` had no way to act on: `generic_image_train.py`
+hardcoded `IMG_SIZE = 64`. Caught by testing the live loop, not by reading
+the code, exactly the discipline this repo's own earlier ADRs already
+practice. Fixed properly, not patched around: `image_size` is now a real
+parameter threaded through `generic_image_train.run()` (safe because
+`SmallCNN`'s `AdaptiveAvgPool2d` makes the architecture resolution-agnostic),
+bounded in `agent/bounds.py` (32-224px) the same way epochs/batch_size/lr
+already were, and `configure_run` accepts it so a user's answer to that
+exact question changes what actually trains, not just what gets narrated.
+
+**Verified live**: the full loop -- fetch (cached) -> detect -> explore ->
+a real, specific, memory-and-finding-grounded `ask_user` call, citing the
+actual class-imbalance ratio and dimension spread found -- confirmed twice
+against the maize dataset. The harness's own deliberate design (state
+never touches the model, only small scalars) held even under this new,
+more open-ended tool: the model proposed real numbers, `configure_run`
+clamped what needed clamping, and the pause-then-resume mechanism worked
+exactly as designed.
+
+## Addendum, 2026-08-30: a lighter reflective chat, no tools involved
+
+The easier complement to the above, and genuinely simpler to build: a
+plain conversation grounded in the passport's own recorded history, for
+"what have we done so far, what's worth trying next." `agent/chat.py`
+reuses `llm.py`'s `AdkJudge` session plumbing verbatim -- no new agent
+machinery, just a different system instruction, built once from
+`build_passport_summary()` (every project's real status, verified
+metrics, and most recent lessons, reusing `recall.py`'s own
+`all_project_keys()`). Exposed as `POST /api/chat` on the web interface,
+with a chat panel always visible below the run form. Answers are honest
+about weak results by instruction, and suggestions are directed to be
+concrete and grounded in the actual recorded gaps -- not generic ML
+advice a stranger to this project's history could have given.
+
 ## Next steps
 
 1. A real local corpus for either supported task type, if there's time --
@@ -232,5 +304,8 @@ the new agent-run project) with no server running.
 2. A third supported task type (tabular), if the deadline allows it --
    `detect_task_type`'s error-dict contract already makes this additive,
    not a rework.
-3. Full rehearsal: an agent run recorded start to finish for the demo,
+3. `ask_user` could reasonably fire a second time after a surprising
+   `train_and_verify` result (the system instruction already allows this,
+   not yet observed live) -- worth confirming in rehearsal.
+4. Full rehearsal: an agent run recorded start to finish for the demo,
    from a cold environment, alongside the existing Socratic sessions.

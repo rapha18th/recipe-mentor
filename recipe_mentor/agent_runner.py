@@ -47,6 +47,14 @@ async def _drive_and_print(toolkit: AgentToolkit, session, passport, problem: st
             line = format_event(event)
             if line is not None:
                 print(("\n" if event["type"] in ("tool_call", "budget_reached", "fallback_finalized") else "") + line)
+        if event["type"] == "awaiting_choice":
+            opts = event.get("options") or []
+            hint = f" [{' / '.join(opts)}]" if opts else ""
+            try:
+                answer = input(f"> {hint} ").strip()
+            except EOFError:
+                answer = ""
+            toolkit.answer_pending(answer)
         if event["type"] == "done":
             final_text = event["final_text"]
     return final_text
