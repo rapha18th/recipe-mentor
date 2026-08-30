@@ -1,3 +1,5 @@
+<img src="docs/mark.png" width="88" alt="Recipe Mentor">
+
 # Recipe Mentor
 
 A Collaborative Partner agent, built on
@@ -42,11 +44,22 @@ with real tools. Fork this as a template for that shape of agent.
    clarifying question before it starts and one for feedback after it
    finishes, so the answer shapes this run and the feedback shapes the
    next one. See "Autonomous agent mode" below.
-4. **A real agent framework judging real answers, too.** `llm.py`'s
+4. **A decision the agent genuinely waits on, not a scripted check-in.**
+   `explore_dataset()` samples the fetched dataset for real findings; one
+   tool, `ask_user()`, blocks on an actual `asyncio.Future` until a real
+   answer arrives, mid-run, before the agent configures anything. Two real
+   concurrency bugs, found by testing the live loop and documented in the
+   ADR, stood between "the model decided to ask" and "the tool is
+   genuinely waiting" -- they're the same moment in a mental model of the
+   loop and two different events one step apart in the actual one.
+5. **A reflective chat, no tools at all.** `agent/chat.py` answers "what's
+   been tried, what's worth exploring next" from the passport's own
+   recorded history -- weak results included, not glossed over.
+6. **A real agent framework judging real answers, too.** `llm.py`'s
    `AdkJudge` runs a second ADK agent (`LlmAgent` + `Runner` + session)
    against Gemini 3.5, for the Socratic path. It genuinely evaluates
    whether a free-text answer satisfies a stated rule.
-5. **Real pipelines behind every project.** A maize leaf-disease CNN and a
+7. **Real pipelines behind every project.** A maize leaf-disease CNN and a
    MIMII-based generator-fault autoencoder, hand-built for the two demo
    cards. Generic versions of both, `generic_image_train.py` and
    `generic_audio_anomaly_train.py`, back the autonomous path for any
