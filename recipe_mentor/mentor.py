@@ -186,7 +186,7 @@ class MentorSession:
             feedback = s.risk_note
 
         status = "done" if correct else "corrected"
-        self._write_status(step_num, status, detail=answer[:200])
+        self.write_status(step_num, status, detail=answer[:200])
 
         if correct:
             return f"Good -- step {step_num} ({s.title}) checks out."
@@ -195,7 +195,7 @@ class MentorSession:
             f"On {self.project.key}, user proposed '{answer.strip()}' for step {step_num} "
             f"({s.title}); mentor corrected: {feedback}"
         )
-        self._write_lesson(step_num, lesson_text)
+        self.write_lesson(step_num, lesson_text)
         return f"Careful -- step {step_num}: {feedback}"
 
     def record_metric(self, name: str, value: float | int | str) -> None:
@@ -217,16 +217,16 @@ class MentorSession:
             )],
         )
 
-    # -- internals ----------------------------------------------------------
+    # -- public writes, also used by the autonomous agent path --------------
 
-    def _write_status(self, step_num: int, status: str, *, detail: str = "") -> None:
+    def write_status(self, step_num: int, status: str, *, detail: str = "") -> None:
         key = f"{self.project.fact_prefix()}_step_{step_num:02d}_status"
         merge_passport_update(
             self.passport,
             facts=[Fact(key=key, value=status, source=self.source, confidence=0.9)],
         )
 
-    def _write_lesson(self, step_num: int, text: str) -> None:
+    def write_lesson(self, step_num: int, text: str) -> None:
         obs = Observation(
             text=text,
             when=date.today().isoformat(),
@@ -234,6 +234,22 @@ class MentorSession:
             participants=["user", "recipe_mentor"],
         )
         merge_passport_update(self.passport, observations=[obs])
+
+    def write_step_note(self, step_num: int, status: str, text: str) -> None:
+        """Used by the autonomous agent path (agent_runner.py): every tool
+        call's real outcome becomes both a status Fact and a dated
+        Observation, unlike the Socratic path (which only writes a lesson
+        on a correction) -- an agent run's "lesson" is closer to "what
+        actually happened," and future cross-project recall benefits from
+        having real content to cite, not just corrections."""
+        self.write_status(step_num, status, detail=text[:200])
+        self.write_lesson(step_num, text)
+
+    # -- back-compat aliases -- write_status/write_lesson are the public
+    # surface; kept under the old private names too in case anything else
+    # in a fork of this repo still calls them directly.
+    _write_status = write_status
+    _write_lesson = write_lesson
 
 
 def _print_progress(passport: Passport, project: ProjectCard) -> None:

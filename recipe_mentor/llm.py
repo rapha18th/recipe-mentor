@@ -116,3 +116,63 @@ class AdkJudge:
 
 def build_judge(**kwargs) -> AdkJudge:
     return AdkJudge(**kwargs)
+
+
+class AgentRunner:
+    """
+    A real tool-calling ADK agent -- LlmAgent with `tools=`, driven by the
+    same Runner/InMemorySessionService/asyncio-bridge pattern as AdkJudge,
+    reused rather than duplicated. Unlike AdkJudge, a caller here needs to
+    see every event (tool calls and their results), not just the final
+    text -- that's the actual evidence the agent is doing real work, not
+    just talking -- so `run()` is an async generator over the raw ADK
+    event stream instead of hiding it behind a single `ask()` call.
+    """
+
+    def __init__(
+        self,
+        *,
+        tools: list,
+        instruction: str,
+        project: str = DEFAULT_PROJECT,
+        location: str = DEFAULT_LOCATION,
+        model: str = DEFAULT_MODEL,
+        user_id: str = "recipe_mentor_agent",
+        name: str = "recipe_mentor_agent",
+    ):
+        _ensure_vertex_env(project, location)
+        from google.adk.agents import LlmAgent
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+
+        self.model = model
+        self.user_id = user_id
+        self.session_id = f"{user_id}_session"
+        self._agent = LlmAgent(model=model, name=name, instruction=instruction, tools=tools)
+        self._session_service = InMemorySessionService()
+        self._runner = Runner(agent=self._agent, app_name=APP_NAME, session_service=self._session_service)
+        self._session_ready = False
+
+    async def _ensure_session(self) -> None:
+        if not self._session_ready:
+            await self._session_service.create_session(
+                app_name=APP_NAME, user_id=self.user_id, session_id=self.session_id,
+            )
+            self._session_ready = True
+
+    async def run(self, prompt: str):
+        """Async generator yielding raw ADK events -- tool calls, tool
+        results, and the final text response -- for a caller to observe
+        and act on live."""
+        from google.genai.types import Content, Part
+
+        await self._ensure_session()
+        message = Content(parts=[Part(text=prompt)], role="user")
+        async for event in self._runner.run_async(
+            user_id=self.user_id, session_id=self.session_id, new_message=message,
+        ):
+            yield event
+
+
+def build_agent_runner(tools: list, instruction: str, **kwargs) -> AgentRunner:
+    return AgentRunner(tools=tools, instruction=instruction, **kwargs)

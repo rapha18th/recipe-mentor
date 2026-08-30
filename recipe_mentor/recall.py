@@ -90,19 +90,46 @@ def cross_project_recall(
     passport: Passport,
     current_project_key: str,
     risk_steps: tuple[int, ...],
+    *,
+    task_type: str | None = None,
 ) -> dict[int, list[StepLesson]]:
     """
     For a project about to start (identified by its own card's risk_steps),
     pull every lesson recorded against those same step numbers by any OTHER
     project. This is the exact call the diesel-generator session's opening
     turn makes before the user has typed anything.
+
+    `task_type`, if given, filters recalled lessons to projects registered
+    with that same task_type in passport.meta["projects"] (see
+    projects/dynamic.py -- the autonomous agent path). A legacy project
+    with no meta entry (the two hardcoded maize/diesel_generator cards) has
+    no task_type recorded at all, so it's never filtered out by this --
+    behavior for the existing Socratic flow is unchanged.
     """
     recalled: dict[int, list[StepLesson]] = {}
+    projects_meta = passport.meta.get("projects", {}) if task_type is not None else {}
     for step in risk_steps:
         found = lessons_for_step(passport, step, exclude_project=current_project_key)
+        if task_type is not None:
+            found = [
+                sl for sl in found
+                if projects_meta.get(sl.project_key, {}).get("task_type", task_type) == task_type
+            ]
         if found:
             recalled[step] = found
     return recalled
+
+
+def all_project_keys(passport: Passport) -> list[str]:
+    """Every project key that has written at least one Observation, or is
+    registered in passport.meta['projects'] -- the full set of projects
+    this passport has ever seen, hardcoded or agent-run."""
+    keys: set[str] = set(passport.meta.get("projects", {}).keys())
+    for obs in passport.observations:
+        m = _SOURCE_RE.match(obs.source)
+        if m:
+            keys.add(m.group("project"))
+    return sorted(keys)
 
 
 def step_status(passport: Passport, project_key: str, step: int) -> str | None:

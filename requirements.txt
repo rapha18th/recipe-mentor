@@ -15,7 +15,9 @@ google-adk
 # Firestore passport store (--store firestore)
 google-cloud-firestore
 
-# ML pipelines (recipe_mentor/pipelines/maize_train.py, mimii_anomaly.py)
+# ML pipelines -- the two hand-built demo pipelines (maize_train.py,
+# mimii_anomaly.py) and the two generic ones the autonomous agent path
+# uses (generic_image_train.py, generic_audio_anomaly_train.py)
 torch
 onnxruntime
 soundfile
@@ -25,5 +27,5 @@ Pillow
 # bounded subset via HTTP range requests rather than the full 6.9GB source zip
 remotezip
 
-# Kaggle dataset download (maize_train.py's data source)
+# Kaggle dataset download -- kaggle_fetch.py (agent_runner.py, any dataset)
 kaggle
