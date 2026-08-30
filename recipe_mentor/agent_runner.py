@@ -7,6 +7,11 @@ passport as it happens, via the same deterministic merge_passport_update()
 path the Socratic mentor.py session uses -- the write side never depends on
 the model being right, only on what its tools actually did.
 
+The actual driving loop lives in agent/core.py::run_agent(), an async
+generator shared with the hosted web interface (web/app.py) -- this module
+is just the CLI's presentation of the same event stream, plus the two
+human check-ins (see below).
+
 Two real human check-ins bracket the autonomous core, per the Collaborative
 Partner track's own requirement to ask clarifying questions, guide the user
 step by step, and capture feedback that adapts future runs: one question
@@ -27,161 +32,33 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import dataclasses
-import time
 
-from sozograph.resolver import merge_passport_update
-from sozograph.schema import Entity, Passport
-
+from .agent.core import build_kickoff_prompt, provisional_project_card, run_agent
 from .agent.toolkit import AgentToolkit
 from .dashboard.render_dashboard import render as render_dashboard
-from .llm import build_agent_runner
-from .mentor import (
-    DEFAULT_USER_KEY, PASSPORT_PATH, MentorSession, _load_passport, _print_progress, _save_passport,
-)
-from .projects import ProjectCard
-from .projects.dynamic import TASK_TYPE_RISK_STEPS, author_project_card, slugify_project_key
-from .recall import cross_project_recall
-
-MAX_EVENTS = 60
-MAX_SECONDS = 300
-
-_AGENT_INSTRUCTION = (
-    "You are an autonomous ML engineer following a proven twelve-step production "
-    "recipe. Given a problem statement and a Kaggle dataset reference, call your "
-    "tools in this order: fetch_kaggle_dataset, detect_task_type, configure_run, "
-    "train_and_verify, record_results. Each tool enforces the recipe's discipline "
-    "itself -- you cannot skip quantization or verification, only choose "
-    "hyperparameters within the range the tool accepts. If a tool returns an "
-    "error, read it and correct your next call; do not repeat the same call "
-    "unchanged. If the user stated a priority for speed vs. accuracy, let that "
-    "guide your epoch count choice within the allowed range. After "
-    "record_results succeeds, write one short paragraph summarizing what you "
-    "found, in your own words, speaking directly to the person who asked for "
-    "this project -- then stop."
-)
+from .mentor import DEFAULT_USER_KEY, PASSPORT_PATH, MentorSession, _load_passport, _print_progress, _save_passport
 
 
-def _build_kickoff_prompt(problem: str, dataset_ref: str, passport: Passport, priority: str) -> str:
-    lines = [f"Problem: {problem}", f"Kaggle dataset: {dataset_ref}"]
-    if priority:
-        lines.append(f"User priority for this run: {priority}")
-
-    recall_lines: list[str] = []
-    for task_type, risk_steps in TASK_TYPE_RISK_STEPS.items():
-        recalled = cross_project_recall(passport, "_pending_", risk_steps, task_type=task_type)
-        if not recalled:
-            continue
-        recall_lines.append(f"\n[if this turns out to be a {task_type} project]")
-        for step_num in sorted(recalled):
-            lesson = recalled[step_num][0]
-            when = lesson.observation.when or lesson.observation.ts.date().isoformat()
-            recall_lines.append(f"  step {step_num}: {lesson.observation.text} [from '{lesson.project_key}', {when}]")
-    if recall_lines:
-        lines.append(
-            "\nBefore you start: here is what past projects in this lab learned, by "
-            "task type. Apply whatever turns out to be relevant once you know which "
-            "type this dataset is." + "\n".join(recall_lines)
-        )
-
-    lines.append("\nNow begin: call fetch_kaggle_dataset, then proceed through the tools in order.")
-    return "\n".join(lines)
-
-
-def _print_tool_call(name: str, args: dict) -> None:
-    shown = ", ".join(f"{k}={v!r}" for k, v in args.items())
-    print(f"\n[tool call] {name}({shown})")
-
-
-def _print_tool_result(name: str, result: dict) -> None:
-    shown = {k: v for k, v in result.items() if k != "step_results"}
-    print(f"[tool result] {name} -> {shown}")
-
-
-def _apply_step_results(session: MentorSession, result: dict) -> None:
-    for step_num, (status, detail) in result.get("step_results", {}).items():
-        session.write_step_note(step_num, status, detail)
-
-
-def _summarize_dataset(info: dict) -> str:
-    if info.get("task_type") == "image_classification":
-        return f"{len(info.get('classes', []))} classes: {', '.join(info.get('classes', []))}."
-    return f"{info.get('n_normal', '?')} normal / {info.get('n_abnormal', '?')} abnormal clips."
-
-
-def _register_project(passport: Passport, card: ProjectCard, task_type: str, dataset_ref: str) -> None:
-    passport.meta.setdefault("projects", {})[card.key] = {
-        **dataclasses.asdict(card), "task_type": task_type, "dataset_ref": dataset_ref,
-    }
-    merge_passport_update(passport, entities=[
-        Entity(name=card.key, type="project", aliases=[dataset_ref, task_type]),
-    ])
-
-
-def _record_metrics_and_licence(session: MentorSession, toolkit: AgentToolkit) -> None:
-    if toolkit.state.get("_metrics_recorded"):
-        return
-    for name, value in toolkit.state.get("report_dict", {}).items():
-        if isinstance(value, (int, float, str, bool)):
-            session.record_metric(name, value)
-    session.record_licence_check(
-        toolkit.state["dataset_ref"].replace("/", "_"), "Kaggle",
-        "see dataset page for terms (fetched by an autonomous agent run)",
-    )
-    toolkit.state["_metrics_recorded"] = True
-
-
-async def _drive(
-    toolkit: AgentToolkit, session: MentorSession, passport: Passport,
-    problem: str, dataset_ref: str, prompt: str,
-) -> str:
-    tools = [
-        toolkit.fetch_kaggle_dataset, toolkit.detect_task_type,
-        toolkit.configure_run, toolkit.train_and_verify, toolkit.record_results,
-    ]
-    runner = build_agent_runner(tools, _AGENT_INSTRUCTION)
-
-    final_text = ""
-    n_events = 0
-    start = time.monotonic()
-    async for event in runner.run(prompt):
-        n_events += 1
-        if event.content and event.content.parts:
-            for part in event.content.parts:
-                fc = getattr(part, "function_call", None)
-                if fc is not None:
-                    _print_tool_call(fc.name, dict(fc.args or {}))
-                fr = getattr(part, "function_response", None)
-                if fr is not None:
-                    result = fr.response or {}
-                    _print_tool_result(fr.name, result)
-                    _apply_step_results(session, result)
-                    if fr.name == "detect_task_type" and "task_type" in result:
-                        full_card = author_project_card(
-                            problem_statement=problem, dataset_ref=dataset_ref,
-                            task_type=result["task_type"], dataset_summary=_summarize_dataset(result),
-                        )
-                        session.project = full_card
-                        _register_project(passport, full_card, result["task_type"], dataset_ref)
-            if event.is_final_response() and event.content.parts:
-                text = event.content.parts[0].text
-                if text:
-                    final_text = text
-        if n_events >= MAX_EVENTS or (time.monotonic() - start) > MAX_SECONDS:
-            print("\n[agent_runner] event/time budget reached, stopping the loop.")
-            break
-
-    # Deterministic fallback: if training finished but the agent never
-    # called record_results, finish it ourselves so the demo always
-    # produces a complete run, through the exact same write path.
-    if toolkit.state.get("report_dict") and not toolkit.state.get("finalized"):
+def _print_event(event: dict) -> None:
+    kind = event["type"]
+    if kind == "tool_call":
+        shown = ", ".join(f"{k}={v!r}" for k, v in event["args"].items())
+        print(f"\n[tool call] {event['name']}({shown})")
+    elif kind == "tool_result":
+        shown = {k: v for k, v in event["result"].items() if k != "step_results"}
+        print(f"[tool result] {event['name']} -> {shown}")
+    elif kind == "budget_reached":
+        print("\n[agent_runner] event/time budget reached, stopping the loop.")
+    elif kind == "fallback_finalized":
         print("\n[agent_runner] agent finished without calling record_results -- finishing deterministically.")
-        result = toolkit.record_results()
-        _apply_step_results(session, result)
 
-    if toolkit.state.get("finalized"):
-        _record_metrics_and_licence(session, toolkit)
 
+async def _drive_and_print(toolkit: AgentToolkit, session, passport, problem: str, dataset_ref: str, prompt: str) -> str:
+    final_text = ""
+    async for event in run_agent(toolkit, session, passport, problem, dataset_ref, prompt):
+        _print_event(event)
+        if event["type"] == "done":
+            final_text = event["final_text"]
     return final_text
 
 
@@ -206,18 +83,12 @@ def main(argv: list[str] | None = None) -> None:
         priority = ""
 
     passport = _load_passport(store=args.store)
-    key = slugify_project_key(args.problem, args.dataset)
-    provisional = ProjectCard(
-        key=key, concept=args.problem, sensors="(agent-run project)",
-        baseline_dataset=f"Kaggle: {args.dataset}", why_good_baseline="",
-        local_gap="", path_to_production="", first_90_days="",
-    )
-    session = MentorSession(passport, provisional, source="agent:cli")
+    session = MentorSession(passport, provisional_project_card(args.problem, args.dataset), source="agent:cli")
     toolkit = AgentToolkit()
 
-    kickoff = _build_kickoff_prompt(args.problem, args.dataset, passport, priority)
+    kickoff = build_kickoff_prompt(args.problem, args.dataset, passport, priority)
     print()
-    final_text = asyncio.run(_drive(toolkit, session, passport, args.problem, args.dataset, kickoff))
+    final_text = asyncio.run(_drive_and_print(toolkit, session, passport, args.problem, args.dataset, kickoff))
 
     print("\n" + "=" * 60)
     if final_text:

@@ -20,6 +20,7 @@ google-cloud-firestore
 # uses (generic_image_train.py, generic_audio_anomaly_train.py)
 torch
 onnxruntime
+onnx  # onnxruntime.quantization imports this; not pulled in automatically
 soundfile
 Pillow
 
@@ -29,3 +30,8 @@ remotezip
 
 # Kaggle dataset download -- kaggle_fetch.py (agent_runner.py, any dataset)
 kaggle
+
+# Hosted web interface (recipe_mentor/web/app.py, docs/DEPLOY.md)
+fastapi
+uvicorn[standard]
+pydantic

@@ -2,18 +2,23 @@
 
 A Collaborative Partner agent, built on
 [SozoGraph](https://github.com/Sozo-Analytics-Lab/sozograph)
-([PyPI](https://pypi.org/project/sozograph/)). It adapts and personalizes
-based on past interactions instead of starting over each time. It walks a
-builder through a real twelve-step ML production recipe for two project
-cards. It recalls what tripped the user up in one project, unprompted, the
-moment they start a second, unrelated one.
+([PyPI](https://pypi.org/project/sozograph/)). Give it a problem and a
+Kaggle dataset and a real Google ADK agent fetches the data, figures out
+what kind of task it is, trains and quantizes and verifies a model, and
+records the result, deciding what to call and when. It asks one
+clarifying question before it starts and one for feedback after it
+finishes, and it recalls what tripped it up on one project, unprompted,
+the moment a related project starts.
+
+**Try it live: [recipe-mentor-web-186891137448.us-central1.run.app](https://recipe-mentor-web-186891137448.us-central1.run.app)**
+-- hosted on Cloud Run, bring your own Kaggle credentials, nothing to
+install. See "Autonomous agent mode" below.
 
 Built for the "All Things Agentic" hackathon's Collaborative Partner track.
-The pattern generalizes. Any structured, repeatable workflow, a recipe, a
-runbook, a checklist someone follows more than once, can sit on top of the
-same three pieces: a portable memory passport, a deterministic tag-based
-recall layer, and a real LLM judge. Fork this as a template for that shape
-of agent.
+The pattern generalizes. Any structured, repeatable workflow, and any real
+work worth delegating, can sit on top of the same pieces: a portable
+memory passport, a deterministic tag-based recall layer, and a real agent
+with real tools. Fork this as a template for that shape of agent.
 
 ## What's actually being demonstrated
 
@@ -205,6 +210,22 @@ priority, free text, folded straight into the agent's own instructions)
 and one for feedback after it finishes. The feedback is recorded the same
 way every lesson is, so the next project of the same kind sees it,
 unprompted, before it starts.
+
+### Hosted interface
+
+The same agent, from a browser, no terminal required:
+
+**[recipe-mentor-web-186891137448.us-central1.run.app](https://recipe-mentor-web-186891137448.us-central1.run.app)**
+
+Vertex access is the Cloud Run service's own -- nothing GCP-related is ever
+sent by the browser. Kaggle access is bring-your-own: each visitor's
+username and API key are used once, for that one run, held only in memory,
+and cleared the moment it ends. Sharing one person's Kaggle credentials to
+download data on someone else's behalf isn't something Kaggle's own terms
+allow, so this couldn't be a shared service credential the way Vertex is.
+
+To run it yourself, locally or on your own Cloud Run project, see
+`docs/DEPLOY.md`.
 
 **Two supported dataset shapes**, detected automatically:
 

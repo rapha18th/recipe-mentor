@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recipe Mentor</title>
+<style>
+  :root {
+    --bg: #FAF6EC;
+    --panel: #ffffff;
+    --ink: #1a1a1a;
+    --muted: #6b6b6b;
+    --border: #d8d3c4;
+    --teal: #158A8A;
+    --teal-dark: #0f6666;
+    --gold: #C89A2E;
+    --gold-bg: #F6DFA3;
+    --purple: #6E63C9;
+    --purple-bg: #D9D6F5;
+    --orange: #D97A45;
+    --orange-bg: #F8D3BE;
+    --error: #B3452C;
+    --error-bg: #F8D9CF;
+    --done: #2E7D4F;
+    --done-bg: #DCEFE1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }
+
+  header { margin-bottom: 40px; }
+  h1 { font-size: 28px; font-weight: 800; margin: 0 0 8px; }
+  .tagline { color: var(--muted); font-size: 15px; margin: 0; max-width: 60ch; }
+
+  .panel {
+    background: var(--panel); border: 1.5px solid var(--border); border-radius: 14px;
+    padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .panel h2 { font-size: 15px; font-weight: 700; margin: 0 0 16px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+
+  label { display: block; font-size: 13.5px; font-weight: 600; margin: 16px 0 6px; }
+  label:first-child { margin-top: 0; }
+  .help { font-size: 12.5px; color: var(--muted); margin: -2px 0 0; }
+  input[type=text], input[type=password], textarea {
+    width: 100%; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff; color: var(--ink);
+  }
+  input:focus, textarea:focus { outline: none; border-color: var(--teal); }
+  textarea { resize: vertical; min-height: 64px; }
+
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .row { grid-template-columns: 1fr; } }
+
+  .trust-note {
+    font-size: 12px; color: var(--muted); margin-top: 8px; padding: 8px 10px;
+    background: var(--bg); border-radius: 6px; border: 1px solid var(--border);
+  }
+
+  button {
+    font-family: inherit; font-size: 14.5px; font-weight: 700; border: none; border-radius: 9px;
+    padding: 12px 22px; cursor: pointer;
+  }
+  .btn-primary { background: var(--teal); color: #fff; margin-top: 20px; }
+  .btn-primary:hover { background: var(--teal-dark); }
+  .btn-primary:disabled { background: #b7b2a4; cursor: not-allowed; }
+  .btn-secondary { background: transparent; color: var(--teal); border: 1.5px solid var(--teal); }
+  .btn-secondary:hover { background: var(--bg); }
+
+  .banner { border-radius: 8px; padding: 12px 14px; font-size: 13.5px; margin-bottom: 16px; }
+  .banner-error { background: var(--error-bg); color: var(--error); border: 1px solid var(--error); }
+
+  #log {
+    font-family: ui-monospace, Consolas, "SF Mono", monospace; font-size: 12.5px;
+    background: #fbfaf6; border: 1.5px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; max-height: 380px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  }
+  .log-line { padding: 2px 0; }
+  .log-call { color: var(--purple); }
+  .log-result { color: var(--teal-dark); }
+  .log-info { color: var(--muted); }
+  .log-error { color: var(--error); }
+
+  .narration {
+    background: var(--gold-bg); border: 1.5px solid var(--gold); border-radius: 10px;
+    padding: 16px; font-size: 14.5px; margin-top: 16px;
+  }
+
+  .steps { display: grid; grid-template-columns: repeat(12, 1fr); gap: 5px; margin-top: 14px; }
+  .step {
+    aspect-ratio: 1; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; border: 1.5px solid var(--border); background: #fff; color: var(--muted);
+  }
+  .step.done { background: var(--done-bg); border-color: var(--done); color: var(--done); }
+  .step.corrected { background: var(--orange-bg); border-color: var(--orange); color: var(--orange); }
+  .step.noted { background: var(--purple-bg); border-color: var(--purple); color: var(--purple); }
+  .step.not_attempted { background: #f0efe9; border-color: var(--border); color: var(--muted); }
+
+  .footer-links { margin-top: 28px; font-size: 13px; color: var(--muted); text-align: center; }
+  .footer-links a { color: var(--teal); text-decoration: none; }
+  .footer-links a:hover { text-decoration: underline; }
+
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Recipe Mentor</h1>
+    <p class="tagline">
+      Give it a problem and a Kaggle dataset. It fetches the data, figures out what kind of
+      task it is, trains and quantizes and verifies a model, and records the result. It asks
+      one question before it starts and one for feedback after.
+    </p>
+  </header>
+
+  <div id="error-banner" class="banner banner-error hidden"></div>
+
+  <section class="panel" id="form-panel">
+    <h2>Start a project</h2>
+
+    <label for="problem">Problem statement</label>
+    <textarea id="problem" placeholder="e.g. Detect diesel generator bearing faults from acoustic recordings"></textarea>
+
+    <label for="dataset">Kaggle dataset</label>
+    <input type="text" id="dataset" placeholder="owner/slug">
+    <p class="help">A folder of class-named image subfolders, or normal/abnormal .wav folders. Anything else gets a plain error back, not a guess.</p>
+
+    <label for="priority">Priority for this run (optional)</label>
+    <input type="text" id="priority" placeholder="e.g. favor speed over accuracy">
+
+    <div class="row">
+      <div>
+        <label for="kaggle_username">Kaggle username</label>
+        <input type="text" id="kaggle_username" autocomplete="off">
+      </div>
+      <div>
+        <label for="kaggle_key">Kaggle API key</label>
+        <input type="password" id="kaggle_key" autocomplete="off">
+      </div>
+    </div>
+    <p class="trust-note">
+      Used only to fetch this one dataset, for this one run. Never written to disk, never
+      logged, cleared the moment the run ends. From
+      <a href="https://www.kaggle.com/settings" target="_blank" rel="noopener">kaggle.com/settings</a>
+      &rarr; API &rarr; Create New Token.
+    </p>
+
+    <button class="btn-primary" id="start-btn" onclick="startRun()">Start</button>
+  </section>
+
+  <section class="panel hidden" id="run-panel">
+    <h2>Run in progress</h2>
+    <div id="log"></div>
+    <div id="narration-wrap" class="hidden">
+      <div class="narration" id="narration"></div>
+    </div>
+    <div id="steps" class="steps hidden"></div>
+
+    <div id="feedback-block" class="hidden">
+      <label for="feedback">Feedback on this run (optional)</label>
+      <textarea id="feedback" placeholder="Anything to remember for next time?"></textarea>
+      <button class="btn-primary" onclick="submitFeedback()">Submit feedback</button>
+      <button class="btn-secondary" onclick="skipFeedback()">Skip</button>
+    </div>
+
+    <div id="done-block" class="hidden">
+      <button class="btn-secondary" onclick="location.reload()">Start another project</button>
+    </div>
+  </section>
+
+  <div class="footer-links">
+    <a href="/api/dashboard" target="_blank">View project dashboard</a>
+    &middot; every run, hand-authored or agent-run, side by side
+  </div>
+</main>
+
+<script>
+let currentRunId = null;
+
+function showError(msg) {
+  const el = document.getElementById('error-banner');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function clearError() {
+  document.getElementById('error-banner').classList.add('hidden');
+}
+function logLine(text, cls) {
+  const log = document.getElementById('log');
+  const div = document.createElement('div');
+  div.className = 'log-line ' + (cls || '');
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function startRun() {
+  clearError();
+  const problem = document.getElementById('problem').value.trim();
+  const dataset = document.getElementById('dataset').value.trim();
+  const priority = document.getElementById('priority').value.trim();
+  const kaggle_username = document.getElementById('kaggle_username').value.trim();
+  const kaggle_key = document.getElementById('kaggle_key').value.trim();
+
+  document.getElementById('start-btn').disabled = true;
+
+  let resp;
+  try {
+    resp = await fetch('/api/run', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({problem, dataset, priority, kaggle_username, kaggle_key}),
+    });
+  } catch (e) {
+    showError('Could not reach the server: ' + e);
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({detail: resp.statusText}));
+    showError(body.detail || 'The run could not be started.');
+    document.getElementById('start-btn').disabled = false;
+    return;
+  }
+
+  const {run_id} = await resp.json();
+  currentRunId = run_id;
+  document.getElementById('form-panel').classList.add('hidden');
+  document.getElementById('run-panel').classList.remove('hidden');
+  streamEvents(run_id);
+}
+
+function streamEvents(runId) {
+  const source = new EventSource('/api/run/' + runId + '/events');
+  source.onmessage = (msg) => {
+    const event = JSON.parse(msg.data);
+    handleEvent(event);
+  };
+  source.onerror = () => {
+    source.close();
+  };
+}
+
+function handleEvent(event) {
+  if (event.type === 'tool_call') {
+    const args = Object.entries(event.args).map(([k, v]) => k + '=' + JSON.stringify(v)).join(', ');
+    logLine('→ ' + event.name + '(' + args + ')', 'log-call');
+  } else if (event.type === 'tool_result') {
+    const shown = Object.fromEntries(Object.entries(event.result).filter(([k]) => k !== 'step_results'));
+    logLine('  ' + event.name + ' -> ' + JSON.stringify(shown), 'log-result');
+  } else if (event.type === 'project_identified') {
+    logLine('  identified as a ' + event.task_type + ' project (' + event.project_key + ')', 'log-info');
+  } else if (event.type === 'budget_reached') {
+    logLine('  event/time budget reached, stopping the loop', 'log-info');
+  } else if (event.type === 'fallback_finalized') {
+    logLine('  finishing deterministically -- the agent didn\'t call record_results itself', 'log-info');
+  } else if (event.type === 'final_text') {
+    document.getElementById('narration').textContent = event.text;
+    document.getElementById('narration-wrap').classList.remove('hidden');
+  } else if (event.type === 'progress') {
+    renderSteps(event.progress);
+    document.getElementById('feedback-block').classList.remove('hidden');
+  } else if (event.type === 'error') {
+    showError('The run failed: ' + event.message);
+    document.getElementById('done-block').classList.remove('hidden');
+  } else if (event.type === 'done') {
+    // final_text already shown; progress event follows separately.
+  }
+}
+
+function renderSteps(progress) {
+  const el = document.getElementById('steps');
+  el.innerHTML = '';
+  for (let i = 1; i <= 12; i++) {
+    const status = progress[i] || 'pending';
+    const div = document.createElement('div');
+    div.className = 'step ' + status;
+    div.textContent = i;
+    div.title = status;
+    el.appendChild(div);
+  }
+  el.classList.remove('hidden');
+}
+
+async function submitFeedback() {
+  const feedback = document.getElementById('feedback').value.trim();
+  await postFeedback(feedback);
+}
+async function skipFeedback() {
+  await postFeedback('');
+}
+async function postFeedback(feedback) {
+  document.getElementById('feedback-block').classList.add('hidden');
+  try {
+    await fetch('/api/run/' + currentRunId + '/feedback', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({feedback}),
+    });
+  } catch (e) {
+    showError('Feedback could not be saved: ' + e);
+  }
+  logLine(feedback ? '  feedback recorded -- future same-task-type projects will see it' : '  feedback skipped', 'log-info');
+  document.getElementById('done-block').classList.remove('hidden');
+}
+</script>
+</body>
+</html>

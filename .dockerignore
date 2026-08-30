@@ -1,0 +1,10 @@
+.git/
+.claude/
+__pycache__/
+*.pyc
+recipe_mentor/data/
+recipe_mentor/passports/*.json
+recipe_mentor/dashboard.html
+docs/
+submission/
+*.md
