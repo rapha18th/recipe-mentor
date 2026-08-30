@@ -46,7 +46,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ..agent.core import build_kickoff_prompt, provisional_project_card, run_agent
+from ..agent.core import build_kickoff_prompt, format_event, provisional_project_card, run_agent
 from ..agent.toolkit import AgentToolkit
 from ..dashboard.render_dashboard import render as render_dashboard
 from ..mentor import MentorSession, _load_passport, _save_passport
@@ -139,8 +139,13 @@ async def _execute_run(run_id: str, req: RunRequest, queue: asyncio.Queue) -> No
         _runs[run_id]["passport"] = passport
 
         kickoff = build_kickoff_prompt(req.problem.strip(), req.dataset.strip(), passport, req.priority.strip())
+        print(f"\n===== run {run_id} started -- Google ADK agent, Gemini 3.5 via Vertex AI =====", flush=True)
         async for event in run_agent(toolkit, session, passport, req.problem.strip(), req.dataset.strip(), kickoff):
             await queue.put(event)
+            line = format_event(event)
+            if line is not None:
+                print(f"[{run_id}] {line}", flush=True)
+        print(f"===== run {run_id} finished =====\n", flush=True)
 
         _save_passport(passport, store=STORE)
         await queue.put({"type": "progress", "progress": project_progress(passport, session.project.key)})

@@ -33,30 +33,20 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from .agent.core import build_kickoff_prompt, provisional_project_card, run_agent
+from .agent.core import build_kickoff_prompt, format_event, provisional_project_card, run_agent
 from .agent.toolkit import AgentToolkit
 from .dashboard.render_dashboard import render as render_dashboard
 from .mentor import DEFAULT_USER_KEY, PASSPORT_PATH, MentorSession, _load_passport, _print_progress, _save_passport
 
 
-def _print_event(event: dict) -> None:
-    kind = event["type"]
-    if kind == "tool_call":
-        shown = ", ".join(f"{k}={v!r}" for k, v in event["args"].items())
-        print(f"\n[tool call] {event['name']}({shown})")
-    elif kind == "tool_result":
-        shown = {k: v for k, v in event["result"].items() if k != "step_results"}
-        print(f"[tool result] {event['name']} -> {shown}")
-    elif kind == "budget_reached":
-        print("\n[agent_runner] event/time budget reached, stopping the loop.")
-    elif kind == "fallback_finalized":
-        print("\n[agent_runner] agent finished without calling record_results -- finishing deterministically.")
-
-
 async def _drive_and_print(toolkit: AgentToolkit, session, passport, problem: str, dataset_ref: str, prompt: str) -> str:
     final_text = ""
     async for event in run_agent(toolkit, session, passport, problem, dataset_ref, prompt):
-        _print_event(event)
+        # final_text prints once, after the "====" separator below, not here.
+        if event["type"] != "final_text":
+            line = format_event(event)
+            if line is not None:
+                print(("\n" if event["type"] in ("tool_call", "budget_reached", "fallback_finalized") else "") + line)
         if event["type"] == "done":
             final_text = event["final_text"]
     return final_text

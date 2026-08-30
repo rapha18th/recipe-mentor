@@ -189,3 +189,27 @@ async def run_agent(
         _record_metrics_and_licence(session, toolkit)
 
     yield {"type": "done", "final_text": final_text}
+
+
+def format_event(event: dict[str, Any]) -> str | None:
+    """One human-readable console line per event, or None to skip it --
+    shared by agent_runner.py's CLI and web/app.py's server-side console
+    mirror, so a terminal watching either front end shows the exact same
+    real, live evidence of Google services being called: the ADK tool
+    calls, in the order they actually happened, not a paraphrase."""
+    kind = event["type"]
+    if kind == "tool_call":
+        args = ", ".join(f"{k}={v!r}" for k, v in event["args"].items())
+        return f"[tool call] {event['name']}({args})"
+    if kind == "tool_result":
+        shown = {k: v for k, v in event["result"].items() if k != "step_results"}
+        return f"[tool result] {event['name']} -> {shown}"
+    if kind == "project_identified":
+        return f"[identified] {event['task_type']} project -> {event['project_key']}"
+    if kind == "final_text":
+        return f"[agent] {event['text']}"
+    if kind == "budget_reached":
+        return "[note] event/time budget reached, stopping the loop"
+    if kind == "fallback_finalized":
+        return "[note] agent finished without calling record_results -- finishing deterministically"
+    return None
