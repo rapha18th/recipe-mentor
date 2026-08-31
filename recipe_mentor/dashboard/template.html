@@ -52,6 +52,41 @@
   ul.lessons li:last-child { border-bottom: none; }
   .lesson-date { color: var(--accent); font-weight: 600; }
   .lesson-source { color: var(--muted); font-size: 11px; }
+
+  .chat-fab {
+    position: fixed; right: 24px; bottom: 24px; width: 56px; height: 56px; border-radius: 50%;
+    background: var(--accent); color: #06121d; border: none; font-size: 22px; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center;
+    z-index: 40;
+  }
+  .chat-fab:hover { filter: brightness(1.08); }
+  .chat-window {
+    position: fixed; right: 24px; bottom: 92px; width: 340px; max-width: calc(100vw - 48px);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.5); z-index: 40; display: flex; flex-direction: column;
+    max-height: 480px;
+  }
+  .chat-window.hidden { display: none; }
+  .chat-window-head { padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+  .chat-window-sub { color: var(--muted); font-weight: 400; font-size: 12px; margin-top: 2px; }
+  #chat-messages {
+    display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; overflow-y: auto; flex: 1;
+    min-height: 120px;
+  }
+  .chat-msg { padding: 8px 11px; border-radius: 8px; font-size: 12.5px; line-height: 1.45; max-width: 90%; }
+  .chat-msg.user { background: var(--accent); color: #06121d; align-self: flex-end; }
+  .chat-msg.agent { background: #1a222c; border: 1px solid var(--border); align-self: flex-start; }
+  .chat-msg.empty { color: var(--muted); font-style: italic; }
+  .chat-row { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--border); }
+  .chat-row input {
+    flex: 1; background: #0b0f14; border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); padding: 8px 10px; font-size: 12.5px; font-family: inherit;
+  }
+  .chat-row input:focus { outline: none; border-color: var(--accent); }
+  .chat-row button {
+    background: var(--accent); color: #06121d; border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -78,5 +113,56 @@
       </tbody>
     </table>
   </section>
+
+  <div class="chat-window hidden" id="chat-window">
+    <div class="chat-window-head">
+      Ask about your history
+      <div class="chat-window-sub">What have we tried so far? What's worth exploring next? Ask a real question. The answer comes from the actual passport.</div>
+    </div>
+    <div id="chat-messages">
+      <div class="chat-msg empty">No questions yet.</div>
+    </div>
+    <div class="chat-row">
+      <input type="text" id="chat-input" placeholder="e.g. what should I try next?" onkeydown="if(event.key==='Enter') sendChat();">
+      <button onclick="sendChat()">Send</button>
+    </div>
+  </div>
+  <button class="chat-fab" id="chat-fab" onclick="toggleChat()" title="Ask about your history" aria-label="Ask about your history">&#128172;</button>
+
+<script>
+function toggleChat() {
+  document.getElementById('chat-window').classList.toggle('hidden');
+}
+function addChatMessage(text, cls) {
+  const box = document.getElementById('chat-messages');
+  const empty = box.querySelector('.chat-msg.empty');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + cls;
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  addChatMessage(message, 'user');
+  addChatMessage('...', 'agent');
+  const box = document.getElementById('chat-messages');
+  const placeholder = box.lastChild;
+  try {
+    const resp = await fetch('/api/chat', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message}),
+    });
+    const body = await resp.json();
+    placeholder.textContent = resp.ok ? body.reply : ('Error: ' + (body.detail || 'something went wrong'));
+  } catch (e) {
+    placeholder.textContent = 'Could not reach the server: ' + e;
+  }
+}
+</script>
 </body>
 </html>

@@ -35,10 +35,12 @@ without typing a credential on camera. See docs/DEPLOY.md.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import tempfile
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -48,23 +50,37 @@ from pydantic import BaseModel
 
 from ..agent.chat import build_history_chat
 from ..agent.core import build_kickoff_prompt, format_event, provisional_project_card, run_agent
-from ..agent.toolkit import AgentToolkit
+from ..agent.toolkit import AGENT_DATA_ROOT, AgentToolkit
 from ..dashboard.render_dashboard import render as render_dashboard
 from ..mentor import MentorSession, _load_passport, _save_passport
 from ..recall import project_progress
+
+#: The three files each real pipeline run writes -- see
+#: pipelines/generic_image_train.py and generic_audio_anomaly_train.py.
+#: Not every run has all three (a run that errored before training has
+#: none), so the export endpoint below includes only what actually exists.
+ARTIFACT_FILES = ("model_fp32.onnx", "model_int8.onnx", "report.json")
 
 STORE = os.environ.get("RECIPE_MENTOR_STORE", "local")
 STATIC_DIR = Path(__file__).parent / "static"
 DASHBOARD_OUT = Path(tempfile.gettempdir()) / "recipe_mentor_dashboard.html"
 
 LOCAL_DEMO = os.environ.get("RECIPE_MENTOR_LOCAL_DEMO", "").lower() in ("1", "true", "yes")
-#: The diesel-generator project's real proxy dataset (see
-#: docs/ADR_Recipe_Mentor_Pipelines_2026-08-29.md for why MIMII-family
-#: acoustic data stands in for a real generator corpus) -- already fetched
-#: and cached locally as of this build, so a recording's first tool call
-#: returns instantly instead of a live multi-minute download.
-LOCAL_DEMO_PROBLEM = "Detect diesel generator bearing faults from acoustic recordings"
-LOCAL_DEMO_DATASET = "senaca/mimii-pump-sound-dataset"
+#: Deliberately not maize or the diesel generator -- both already have a
+#: full history in the passport, so a recorded run on either would skip
+#: straight to recall instead of showing the agent explore a dataset it has
+#: never seen and ask a real, first-time question about it. Also
+#: deliberately not a generic object-recognition set (cats, cars, flowers)
+#: -- the lab's whole premise is models shipped into real field and
+#: production settings, so the demo dataset should read the same way.
+#: Casting product image data for quality inspection
+#: (ravirajsinh45/real-life-industrial-dataset-of-casting-product on
+#: Kaggle): 7,348 grayscale top-view photos of a submersible pump
+#: impeller, from a real foundry's own inspection line, labeled
+#: def_front / ok_front -- an image-side sibling of the diesel generator's
+#: audio-side anomaly detection, same domain, different sensor.
+LOCAL_DEMO_PROBLEM = "Flag defective castings on an automated visual inspection line"
+LOCAL_DEMO_DATASET = "ravirajsinh45/real-life-industrial-dataset-of-casting-product"
 
 app = FastAPI(title="Recipe Mentor")
 
@@ -127,7 +143,15 @@ async def start_run(req: RunRequest) -> dict:
 
     run_id = uuid.uuid4().hex[:12]
     queue: asyncio.Queue = asyncio.Queue()
-    _runs[run_id] = {"queue": queue, "status": "running", "session": None, "passport": None, "toolkit": None}
+    #: out_dir is deterministic from the dataset ref alone (see
+    #: agent/toolkit.py::train_and_verify), so it's known before the run
+    #: even starts -- the export endpoint just checks what's actually
+    #: there once training's had a chance to write it.
+    out_dir = AGENT_DATA_ROOT / "_run" / dataset.replace("/", "__")
+    _runs[run_id] = {
+        "queue": queue, "status": "running", "session": None, "passport": None,
+        "toolkit": None, "dataset": dataset, "out_dir": out_dir,
+    }
     asyncio.create_task(_execute_run(run_id, req, queue))
     return {"run_id": run_id}
 
@@ -198,6 +222,41 @@ async def run_events(run_id: str) -> StreamingResponse:
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.get("/api/run/{run_id}/artifacts")
+async def download_artifacts(run_id: str) -> StreamingResponse:
+    """Zips up whatever this run actually wrote (model_fp32.onnx,
+    model_int8.onnx, report.json) and streams it down. This exists because
+    Cloud Run's filesystem is ephemeral -- those files live only as long as
+    the container instance does, and nothing in this repo uploads them
+    anywhere durable. The passport survives in Firestore; the model files
+    only survive if whoever ran this downloads them, here, before the
+    container recycles."""
+    run = _runs.get(run_id)
+    if run is None or not run.get("out_dir"):
+        raise HTTPException(status_code=404, detail="Unknown run.")
+
+    out_dir: Path = run["out_dir"]
+    present = [f for f in ARTIFACT_FILES if (out_dir / f).exists()]
+    if not present:
+        raise HTTPException(
+            status_code=404,
+            detail="No artifact files yet for this run. Training may still be in progress, or the run errored before it got there.",
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in present:
+            zf.write(out_dir / name, arcname=name)
+    buf.seek(0)
+
+    dataset = run.get("dataset", run_id)
+    filename = f"recipe_mentor_{dataset.replace('/', '__')}.zip"
+    return StreamingResponse(
+        buf, media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.post("/api/run/{run_id}/choice")

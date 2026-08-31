@@ -197,6 +197,11 @@
 
     <div id="steps" class="steps hidden"></div>
 
+    <div id="artifacts-block" class="hidden">
+      <a class="btn-secondary" id="artifacts-link" href="#">Download model files (.zip)</a>
+      <p class="help">These files live on this container only. Download them now if you want to keep them.</p>
+    </div>
+
     <div id="feedback-block" class="hidden">
       <label for="feedback">Feedback on this run (optional)</label>
       <textarea id="feedback" placeholder="Anything to remember for next time?"></textarea>
@@ -212,7 +217,7 @@
   <section class="panel chat-panel">
     <h2>Ask about your history</h2>
     <div id="chat-messages">
-      <div class="chat-msg empty">What have we tried so far? What's worth exploring next? Ask a real question -- the answer is grounded in the actual passport, not a guess.</div>
+      <div class="chat-msg empty">What have we tried so far? What's worth exploring next? Ask a real question. The answer comes from the actual passport.</div>
     </div>
     <div class="chat-row">
       <input type="text" id="chat-input" placeholder="e.g. what should I try next?" onkeydown="if(event.key==='Enter') sendChat();">
@@ -329,6 +334,8 @@ function handleEvent(event) {
   } else if (event.type === 'progress') {
     renderSteps(event.progress);
     document.getElementById('feedback-block').classList.remove('hidden');
+    document.getElementById('artifacts-link').href = '/api/run/' + currentRunId + '/artifacts';
+    document.getElementById('artifacts-block').classList.remove('hidden');
   } else if (event.type === 'error') {
     showError('The run failed: ' + event.message);
     document.getElementById('done-block').classList.remove('hidden');
